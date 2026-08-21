@@ -20,6 +20,11 @@ Makefile
 *.so
 *.dylib.dSYM/
 
+# Binary Ninja databases and target samples are local analysis inputs, never
+# distributable plugin source.
+*.bndb
+*.apk
+
 # Local dependency-superbuild outputs. Keep third_party sources as submodules.
 /third_party/CoBRA/build-deps*/
 
