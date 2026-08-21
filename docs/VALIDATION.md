@@ -44,8 +44,9 @@ The dependency prefix was rebuilt from the pinned CoBRA source, outside the
 repository:
 
 ```bash
+REPO_ROOT=$(pwd)
 uvx --from cmake cmake \
-  -S /Users/bytedance/work/smba-cobra-mba/third_party/CoBRA/dependencies \
+  -S "$REPO_ROOT/third_party/CoBRA/dependencies" \
   -B /tmp/smba-cobra-mba-deps-z3 \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCOBRA_ENABLE_Z3=ON \
@@ -56,7 +57,8 @@ uvx --from cmake cmake --build /tmp/smba-cobra-mba-deps-z3 --parallel
 Strict Z3 core configuration, build, and test all succeeded:
 
 ```bash
-uvx --from cmake cmake -S /Users/bytedance/work/smba-cobra-mba \
+REPO_ROOT=$(pwd)
+uvx --from cmake cmake -S "$REPO_ROOT" \
   -B /tmp/smba-cobra-mba-core-z3 \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON -DSMBA_REQUIRE_Z3=ON \
@@ -71,7 +73,8 @@ path)`. Its compile database contained no Binary Ninja terms.
 The forced-no-Z3 configuration, build, and test also succeeded:
 
 ```bash
-uvx --from cmake cmake -S /Users/bytedance/work/smba-cobra-mba \
+REPO_ROOT=$(pwd)
+uvx --from cmake cmake -S "$REPO_ROOT" \
   -B /tmp/smba-cobra-mba-core-no-z3 \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON -DSMBA_REQUIRE_Z3=OFF \
@@ -96,7 +99,8 @@ The Binary Ninja plugin configured and built successfully against the installed
 application (the temporary directory was created with `mktemp -d`):
 
 ```bash
-uvx --from cmake cmake -S /Users/bytedance/work/smba-cobra-mba \
+REPO_ROOT=$(pwd)
+uvx --from cmake cmake -S "$REPO_ROOT" \
   -B /tmp/smba-cobra-mba-plugin-standalone.NxOpKS \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DSMBA_BUILD_PLUGIN=ON -DSMBA_BUILD_TESTS=OFF -DSMBA_REQUIRE_Z3=ON \
