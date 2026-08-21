@@ -1,0 +1,6 @@
+[submodule "third_party/CoBRA"]
+	path = third_party/CoBRA
+	url = https://github.com/trailofbits/CoBRA.git
+[submodule "third_party/binaryninja-api"]
+	path = third_party/binaryninja-api
+	url = https://github.com/Vector35/binaryninja-api.git

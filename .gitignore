@@ -1,0 +1,29 @@
+# CMake and compiler outputs
+/build/
+/build-*/
+/.build/
+/out/
+/install/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Testing/
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.cmake.user
+
+# Compiled products and local Binary Ninja plugin outputs
+*.a
+*.dylib
+*.dll
+*.so
+*.dylib.dSYM/
+
+# Local dependency-superbuild outputs. Keep third_party sources as submodules.
+/third_party/CoBRA/build-deps*/
+
+# Editor and OS metadata
+.DS_Store
+.idea/
+.vscode/
