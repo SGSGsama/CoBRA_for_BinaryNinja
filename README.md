@@ -1,133 +1,93 @@
-# BN CoBRA MBA adapter
+# SMBA CoBRA MBA adapter
 
-`smba-core` recovers selected pure MLIL SSA expression trees, reduces mixed
-boolean-arithmetic expressions with CoBRA, and verifies eligible rewrites with
-Z3. `smba-cobra-mba` is the Binary Ninja adapter: it provides a read-only
-Preview command and an opt-in `.mba` workflow activity. Candidate selection is
-structural; it has no address, function-name, or constant-value allowlist.
+`smba-core` recovers selected pure MLIL SSA expression trees, simplifies arithmetic/bitwise MBA expressions with CoBRA, and proves eligible constant comparisons with Z3. `smba-cobra-mba` is the Binary Ninja adapter: it exposes a read-only Preview command and a deliberately fail-closed `.mba` workflow lifecycle. No address, function-name, or constant-value pattern list selects candidates; eligibility is structural SSA recovery plus proof.
 
-The repository is standalone. Its only source dependencies are pinned Git
-submodules under `third_party/`:
+The source layout is:
 
 ```text
-include/       public core and Binary Ninja-facing interfaces
-src/           CoBRA boundary and Binary Ninja adapter
-tests/         headless core tests
-docs/          reproducible build, safety, and validation records
-scripts/       optional validation automation
-third_party/   pinned CoBRA and Binary Ninja API submodules
+analysis/SMBA_deobf/
+├── CoBRA/                 # CoBRA source, consumed with add_subdirectory
+├── binaryninja-api/       # Binary Ninja C++ API source
+└── bn-cobra-mba/          # this adapter
 ```
 
-## Start here
+Generated `build-*`, `.build/`, CMake caches, objects, libraries, and plugin bundles are not source artifacts. Use out-of-tree builds (for example under `/tmp`) and the `uvx` commands below; do not create a separate Python environment.
 
-Prerequisites:
+## Build and test
 
-- Git and `uv` (the commands below use `uvx` to run CMake).
-- A C++23-capable compiler and its normal platform build tools.
-- A matching Binary Ninja installation only when building the optional plugin.
+The validated CoBRA dependency prefix is:
 
-```bash
-git clone --recurse-submodules <repository-url> smba-cobra-mba
-cd smba-cobra-mba
-git submodule update --init --recursive
-git submodule status
+```text
+analysis/SMBA_deobf/CoBRA/build-deps-smba/install
 ```
 
-The recorded submodule revisions are part of the source boundary. Do not
-replace them with copied dependency trees or an API checkout from a different
-Binary Ninja release.
-
-## Build dependencies
-
-Build CoBRA's dependencies, including Z3, into a temporary prefix outside the
-source checkout:
+From `analysis/SMBA_deobf/bn-cobra-mba`, strict core validation is:
 
 ```bash
-SMBA_REPO="$PWD"
-SMBA_DEPS_BUILD="$(mktemp -d /tmp/smba-cobra-mba-deps-z3.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO/third_party/CoBRA/dependencies" \
-  -B "$SMBA_DEPS_BUILD" \
+SMBA_DEPS="$PWD/../CoBRA/build-deps-smba/install"
+SMBA_BUILD="/tmp/smba-cobra-mba-core"
+uvx --from cmake cmake -S . -B "$SMBA_BUILD" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCOBRA_ENABLE_Z3=ON \
-  -DCOBRA_BUILD_TESTS=OFF
-uvx --from cmake cmake --build "$SMBA_DEPS_BUILD" --parallel
-SMBA_DEPS_PREFIX="$SMBA_DEPS_BUILD/install"
+  -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON \
+  -DSMBA_REQUIRE_Z3=ON -DSMBA_DEPS_PREFIX="$SMBA_DEPS"
+uvx --from cmake cmake --build "$SMBA_BUILD" --parallel
+uvx --from cmake ctest --test-dir "$SMBA_BUILD" --output-on-failure
 ```
 
-Keep `SMBA_REPO` and `SMBA_DEPS_PREFIX` set in the shell used by the following
-commands.
+Run the separately configured forced-no-Z3 branch as well; it confirms that ordinary core simplification may report `Probabilistic` only for diagnostics, whereas every constant-comparison predicate rejects without Z3. The adapter and its workflow always require Z3. Full commands and the test matrix are in [`docs/BUILD_AND_TEST.md`](docs/BUILD_AND_TEST.md).
 
-## Build and test the headless core
+## Recovery and proof boundary
 
-The core build does not require Binary Ninja:
+Recovery starts from reachable normal MLIL roots and validates a two-way normal/SSA expression-index mapping before following SSA def-use. It retains the exact MLIL width: narrower values are masked at their semantic width on `MLIL_ZX`, and mixed-width operations without an explicit legal extension are rejected. Arithmetic candidates must contain both arithmetic and bitwise content; CoBRA must reduce cost and Z3 must prove equivalence.
 
-```bash
-SMBA_CORE_BUILD="$(mktemp -d /tmp/smba-cobra-mba-core-z3.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO" -B "$SMBA_CORE_BUILD" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=OFF \
-  -DSMBA_BUILD_TESTS=ON \
-  -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX="$SMBA_DEPS_PREFIX"
-uvx --from cmake cmake --build "$SMBA_CORE_BUILD" --parallel
-uvx --from cmake ctest --test-dir "$SMBA_CORE_BUILD" --output-on-failure
+Comparison roots are also structural candidates. The adapter handles the signed and unsigned equality/inequality/order relations using the exact bit-vector width and accepts only a Z3 proof that the comparison is always `1` or always `0`. `MLIL_BOOL_TO_INT` is deliberately over-approximated only when it is a predicate leaf: its result is constrained to `0` or `1`, not mistakenly expanded as an arbitrary integer definition. Predicate roots take priority over their accepted arithmetic descendants so an accepted predicate replaces its complete operand tree once.
+
+PHI definitions, load/call outputs, memory/alias-dependent definitions, unsupported casts, width violations, cyclic/budget-exceeding expansion, and unavailable SSA all stop recovery at conservative leaves or reject the root. There is no best-effort rewrite. In particular, `0x51ee30` is intentionally unresolved: it is not a negative address rule and should become eligible only if a future structural recovery/proof path supports it.
+
+Workflow transformation re-collects candidates, selects non-overlapping roots, copies all normal MLIL into a fresh `MediumLevelILFunction`, substitutes only the accepted roots during that copy, finalizes/regenerates SSA, and calls `AnalysisContext::SetMediumLevelILFunction` only after the full copy succeeds. An exception discards the new function and leaves the context unchanged.
+
+## Commands and workflow lifecycle
+
+The plugin registers two function commands:
+
+* **SMBA CoBRA / Preview verified MBA simplifications** calls `smba::PreviewFunction`. It is observational: it does not create SSA, construct replacement IL, change MLIL, change a default setting, save a BNDB, or edit machine code.
+* **SMBA CoBRA / Register or refresh current .mba workflow** implements the lifecycle below and does not change the selected workflow.
+
+Let the current workflow be `W`. The command first checks `W` for
+`extension.smba.cobra.simplifyMlil`, rather than inferring presence from a
+`.mba` suffix. If it is present, the command refreshes `W` in place only when
+its exact Binary Ninja `Activity` is owned by this plugin process; this also
+works for a composed name such as `base.mba.dualbr`. A same-name foreign
+activity is refused. Only when the current workflow has no MBA activity does
+the command use the suffix, deriving literal `W.mba`; if that target already
+exists it is refreshed only when its exact activity is owned, otherwise it is
+refused. Thus a suffix alone is not evidence of installation: an
+activity-absent workflow named `W.mba` is treated literally and may derive
+`W.mba.mba`.
+
+Registered workflow topology is immutable. Ownership is the exact Binary Ninja `Activity` object identity retained by this plugin process, not merely the activity name. The activity holds a locked mutable dispatch state with a generation and action: a refresh advances the generation and replaces the action while retaining the same Activity object. This is why a repeated registration can safely refresh behavior without duplicate activities or graph mutation.
+
+`extension.smba.cobra.base` remains a compatibility workflow clone of `core.function.metaAnalysis`; registering it never selects it. It is opt-in through `analysis.workflows.functionWorkflow`, as is every `W.mba` workflow. Do not describe it as the normal derivative or as a global default.
+
+```python
+from binaryninja import load
+
+with load(
+    "input.bin",
+    options={"analysis.workflows.functionWorkflow": "core.function.metaAnalysis.mba"},
+) as bv:
+    bv.update_analysis_and_wait()
+    bv.create_database("output-applied.bndb")
 ```
 
-To run the complete required matrix (strict Z3 plus forced-no-Z3 safety
-tests) in fresh temporary directories:
+The example explicitly selects an already registered workflow; it is not an Apply command and should use the actual `W.mba` name in the database.
 
-```bash
-scripts/validate.sh --deps-prefix "$SMBA_DEPS_PREFIX"
-```
+## Evidence and rollback
 
-The forced-no-Z3 branch is diagnostic only: no comparison or workflow rewrite
-is authorized unless Z3 proves it.
+The current generic-predicate Preview evidence is [`../draft/smba_cobra_validation/preview_generic_predicates.log`](../draft/smba_cobra_validation/preview_generic_predicates.log): 14 candidates were accepted. It includes true predicates at `0x51eb10` and `0x51ebd4`, false predicates at `0x51ed34` and `0x51ee90`, and deliberately no entry at `0x51ee30`. The legacy arithmetic baseline remains separately recorded as regression coverage, not an exact current candidate count.
 
-## Build the Binary Ninja plugin
+Keep `input.bndb` immutable, use a disposable copy for Preview/workflow experiments, and save an applied result only under a new output path. Preview needs no rollback because it is read-only; for an unsaved workflow result, close without saving and reopen the input. For a saved result, remove only the disposable output and reopen the preserved input. The lifecycle evidence and complete caveats are in [`docs/VALIDATION.md`](docs/VALIDATION.md) and [`docs/WORKFLOW_AND_ROLLBACK.md`](docs/WORKFLOW_AND_ROLLBACK.md).
 
-The Binary Ninja plugin build is optional and requires an installed Binary
-Ninja application matching the pinned API submodule. On macOS, the default
-application path can be passed explicitly:
+## Helper inventory
 
-```bash
-SMBA_PLUGIN_BUILD="$(mktemp -d /tmp/smba-cobra-mba-plugin.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO" -B "$SMBA_PLUGIN_BUILD" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=ON \
-  -DSMBA_BUILD_TESTS=OFF \
-  -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX="$SMBA_DEPS_PREFIX" \
-  -DBN_INSTALL_DIR="/Applications/Binary Ninja.app"
-uvx --from cmake cmake --build "$SMBA_PLUGIN_BUILD" --parallel
-```
-
-Building does not install the plugin. After inspecting the generated install
-destination, installation is an explicit optional step:
-
-```bash
-uvx --from cmake cmake --build "$SMBA_PLUGIN_BUILD" --target install
-```
-
-Restart Binary Ninja after installation. See
-[`docs/BUILD_AND_TEST.md`](docs/BUILD_AND_TEST.md) for the full two-branch test
-contract, static checks, and platform notes.
-
-## Safety model
-
-Preview is observational. It does not create SSA, construct replacement IL,
-change a workflow/default setting, save a database, or edit machine code.
-Application occurs only in an explicitly selected registered `.mba` workflow.
-The workflow copies the function into fresh MLIL and commits only after
-recovery, proof, and regeneration succeed; failure discards the new function.
-
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the recovery and proof
-boundary, while [`docs/WORKFLOW_AND_ROLLBACK.md`](docs/WORKFLOW_AND_ROLLBACK.md)
-defines workflow ownership, lifecycle, and rollback. Validation commands and
-the current reproducibility record are in
-[`docs/VALIDATION.md`](docs/VALIDATION.md).
-
-## License status
-
-No license has been selected for this repository. Redistribution and use terms
-are unspecified until the repository owner supplies an explicit license.
-Third-party submodules retain their own upstream licensing and notices.
+The adapter contains no persisted Python, Frida, or target-process injection scripts. Ephemeral Binary Ninja Python helpers used for validation are inventoried in `docs/VALIDATION.md` with their inputs, outputs, analysis points, usage, and risk. They drive the BN host only; they do not attach to, inject into, or alter an Android process.

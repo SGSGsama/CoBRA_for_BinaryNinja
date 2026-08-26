@@ -1,123 +1,108 @@
-# Build and test contract
+# SMBA build/test contract
 
-All commands below use `uvx` to obtain CMake. Build directories, dependency
-prefixes, objects, libraries, and plugin modules are generated outputs and
-must stay outside this checkout. No separate Python virtual environment is
-required or used.
+This document defines the reproducible, `uv`-managed validation commands for the adapter. Build directories, CMake caches, objects, libraries, and plugin bundles are generated outputs and must remain out of the source tree.
 
-## Bootstrap pinned dependencies
+## Target graph
 
-Initialize the Gitlinks before configuring:
+```text
+smba-core-tests ──> smba-core ──> cobra-core ──> absl, hwy
+                                  └────────────> cobra-verify ──> Z3
 
-```bash
-git submodule update --init --recursive
-git submodule status
+smba-cobra-mba ──> smba-core
+                 └─> binaryninjaapi ──> binaryninjacore (Binary Ninja install)
 ```
 
-From the repository root, create a reusable Z3-enabled dependency prefix in a
-temporary directory. The chosen build directory is intentionally outside the
-repository and can be removed when no longer needed.
+`smba-core-tests` has no Binary Ninja header, library, or runtime dependency. The adapter is built only with `SMBA_BUILD_PLUGIN=ON`; its transformation path is always Z3-gated.
+
+## Dependency prefix
+
+From the repository root, build/rebuild the validation prefix with `uvx`:
 
 ```bash
-SMBA_REPO="$PWD"
-SMBA_DEPS_BUILD="$(mktemp -d /tmp/smba-cobra-mba-deps-z3.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO/third_party/CoBRA/dependencies" \
-  -B "$SMBA_DEPS_BUILD" \
+cd analysis/SMBA_deobf/CoBRA
+uvx --from cmake cmake -S dependencies -B build-deps-smba \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCOBRA_ENABLE_Z3=ON \
-  -DCOBRA_BUILD_TESTS=OFF
-uvx --from cmake cmake --build "$SMBA_DEPS_BUILD" --parallel
-SMBA_DEPS_PREFIX="$SMBA_DEPS_BUILD/install"
+  -DCOBRA_ENABLE_Z3=ON -DCOBRA_BUILD_TESTS=OFF
+uvx --from cmake cmake --build build-deps-smba --parallel
 ```
 
-The prefix must contain CMake package configs for absl and highway. It also
-contains Z3 when enabled. The top-level configure checks this boundary before
-it adds CoBRA, so an incomplete prefix fails with an actionable error.
+The expected prefix is `analysis/SMBA_deobf/CoBRA/build-deps-smba/install`. It supplies `absl`, `hwy`, and CoBRA's Z3 verifier. Do not replace these commands with system CMake/Python or an unmanaged virtual environment.
 
-## Required headless test matrix
+## Core test matrix
 
-Run both branches from the repository root. Each uses a new out-of-tree build
-directory; neither needs a Binary Ninja installation.
+Run both branches from `analysis/SMBA_deobf/bn-cobra-mba`:
 
 ```bash
-SMBA_Z3_BUILD="$(mktemp -d /tmp/smba-cobra-mba-core-z3.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO" -B "$SMBA_Z3_BUILD" \
+SMBA_DEPS="$PWD/../CoBRA/build-deps-smba/install"
+SMBA_BUILD="/tmp/smba-cobra-mba-core-z3"
+uvx --from cmake cmake -S . -B "$SMBA_BUILD" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=OFF \
-  -DSMBA_BUILD_TESTS=ON \
-  -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX="$SMBA_DEPS_PREFIX"
-uvx --from cmake cmake --build "$SMBA_Z3_BUILD" --parallel
-uvx --from cmake ctest --test-dir "$SMBA_Z3_BUILD" --output-on-failure
+  -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON \
+  -DSMBA_REQUIRE_Z3=ON -DSMBA_DEPS_PREFIX="$SMBA_DEPS"
+uvx --from cmake cmake --build "$SMBA_BUILD" --parallel
+uvx --from cmake ctest --test-dir "$SMBA_BUILD" --output-on-failure
 
-SMBA_NO_Z3_BUILD="$(mktemp -d /tmp/smba-cobra-mba-core-no-z3.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO" -B "$SMBA_NO_Z3_BUILD" \
+SMBA_NO_Z3_BUILD="/tmp/smba-cobra-mba-core-no-z3"
+uvx --from cmake cmake -S . -B "$SMBA_NO_Z3_BUILD" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=OFF \
-  -DSMBA_BUILD_TESTS=ON \
-  -DSMBA_REQUIRE_Z3=OFF \
-  -DCMAKE_DISABLE_FIND_PACKAGE_Z3=ON \
-  -DSMBA_DEPS_PREFIX="$SMBA_DEPS_PREFIX"
+  -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON \
+  -DSMBA_REQUIRE_Z3=OFF -DCMAKE_DISABLE_FIND_PACKAGE_Z3=ON \
+  -DSMBA_DEPS_PREFIX="$SMBA_DEPS"
 uvx --from cmake cmake --build "$SMBA_NO_Z3_BUILD" --parallel
 uvx --from cmake ctest --test-dir "$SMBA_NO_Z3_BUILD" --output-on-failure
 ```
 
-The Z3 branch must prove constant predicates and set `z3Verified`. In the
-forced-no-Z3 branch all predicate proofs must reject, regardless of the
-runtime `requireZ3` option; only a separate ordinary arithmetic diagnostic may
-be `Probabilistic`. This verifies that proof failure cannot become rewrite
-authority.
+The core tests cover arithmetic simplification, unchanged constants, invalid width/variable limits, and generalized predicate proof: true and false constant comparisons, non-constant rejection, signed/unsigned distinctions, wide logical shifts, and invalid predicate inputs. The Z3 build must record `ProvedConstant` and `z3Verified` for proved predicates. In the no-Z3 build, all predicate proofs reject; the only `Probabilistic` result is the separate ordinary arithmetic diagnostic path, never a predicate or workflow rewrite.
 
-`scripts/validate.sh --deps-prefix "$SMBA_DEPS_PREFIX"` runs this exact core
-matrix in fresh temporary directories. It intentionally has no install action.
+`SMBA_REQUIRE_Z3` is a configure-time fail-closed gate, not a runtime proof-policy setting. The adapter sets `SimplifyOptions.requireZ3=true` internally, and `AnalysisLimits` contains resource budgets only.
 
-## Binary Ninja plugin build
+## Plugin build
 
-Use the pinned Binary Ninja API submodule and a Binary Ninja installation
-matching it. On macOS, an application at `/Applications/Binary Ninja.app` is
-passed explicitly as follows:
+The plugin requires CoBRA's verifier even if the core-only no-Z3 configuration is useful for diagnostics:
 
 ```bash
-SMBA_PLUGIN_BUILD="$(mktemp -d /tmp/smba-cobra-mba-plugin.XXXXXX)"
-uvx --from cmake cmake -S "$SMBA_REPO" -B "$SMBA_PLUGIN_BUILD" \
+SMBA_PLUGIN_BUILD="/tmp/smba-cobra-mba-plugin"
+uvx --from cmake cmake -S . -B "$SMBA_PLUGIN_BUILD" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=ON \
-  -DSMBA_BUILD_TESTS=OFF \
-  -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX="$SMBA_DEPS_PREFIX" \
+  -DSMBA_BUILD_PLUGIN=ON -DSMBA_BUILD_TESTS=OFF \
+  -DSMBA_REQUIRE_Z3=ON -DSMBA_DEPS_PREFIX="$SMBA_DEPS" \
+  -DSMBA_BINARYNINJA_API_DIR=../binaryninja-api \
   -DBN_INSTALL_DIR="/Applications/Binary Ninja.app"
 uvx --from cmake cmake --build "$SMBA_PLUGIN_BUILD" --parallel
 ```
 
-The plugin build is Z3-only. `SMBA_BN_ALLOW_STUBS=ON` is compile-only and does
-not yield a loadable plugin. Installation is a separate user decision; this
-repository does not invoke it. If installation is intended, inspect the
-generated install destination first, then run the explicit target yourself:
+Run `uvx --from cmake cmake --build "$SMBA_PLUGIN_BUILD" --target install` only when installation into the user's plugin directory is intentional. `SMBA_BN_ALLOW_STUBS=ON` is compile-only and never produces a loadable plugin.
+
+## Static documentation/API checks
+
+The core compile commands must not mention Binary Ninja:
 
 ```bash
-uvx --from cmake cmake --build "$SMBA_PLUGIN_BUILD" --target install
+rg -n -i 'binaryninja|binaryninjacore|binaryninjaapi' \
+  "$SMBA_BUILD/compile_commands.json"
 ```
 
-## Static checks
-
-The headless core compile database must not mention Binary Ninja:
+From the adapter root, check the current public terms and reject obsolete derivative/count claims:
 
 ```bash
-if rg -n -i 'binaryninja|binaryninjacore|binaryninjaapi' \
-  "$SMBA_Z3_BUILD/compile_commands.json"; then
-  echo "headless core unexpectedly depends on Binary Ninja" >&2
+if rg -n '\.smba-cobra|Register derivative of current workflow|five accepted|0x44442c' \
+  README.md docs --glob '!BUILD_AND_TEST.md' --glob '!VALIDATION.md'; then
+  echo "stale workflow or candidate-count documentation" >&2
   exit 1
 fi
-```
+rg -n 'Register or refresh current \.mba workflow|W\.mba|ProveConstantComparison|preview_generic_predicates\.log|workflow_register_refresh\.log' README.md docs
 
-Verify first-party source and documentation do not carry sample-specific
-terms before release:
-
-```bash
-SMBA_FORBIDDEN_PATTERN='mt''guard|0x51''e970|0x444''42c|project'' evidence|reverse_for_fun''_mt'
-if rg -n -i "$SMBA_FORBIDDEN_PATTERN" \
-  --glob '!third_party/**' .; then
-  echo "sample-specific text found in distributable files" >&2
+# The current-function lifecycle is activity-first. A suffix may construct a
+# derivative name only after the activity-absence branch, never route refresh.
+if rg -n 'ends_with|\.ends_with' src/Plugin.cpp; then
+  echo "Plugin.cpp must not use a suffix as a workflow lifecycle condition" >&2
   exit 1
 fi
+rg -n 'current->Contains\(smba::kActivityName\)|AddActivityToWorkflow\(current\)' src/Plugin.cpp
 ```
+
+The first search is intentionally negative. Historical arithmetic-site data belongs only in the explicitly marked legacy baseline evidence, never as the current Preview total.
+
+## Helper inventory rule
+
+No persisted helper is required for this adapter. Any future helper—also an ephemeral BN Python here-doc—must be recorded in `docs/VALIDATION.md` with purpose, inputs, outputs, hook/analysis point, validation target, invocation, and injection risk. BN-host helpers are not Android-process injection; state that distinction explicitly.

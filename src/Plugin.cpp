@@ -120,28 +120,20 @@ void RegisterOrRefreshWorkflow(Function* function) {
     }
 
     const std::string currentName = current->GetName();
-    // A selected .mba workflow must never be derived again.  It can be
-    // refreshed only when its exact Activity object was registered by this
-    // plugin process; AddActivityToWorkflow verifies that identity and
-    // refreshes the shared dispatch state.
-    if (currentName.ends_with(".mba")) {
-        if (!current->Contains(smba::kActivityName)) {
-            LogError(
-                "[SMBA] refusing current MBA workflow %s: it lacks %s; will not append another .mba",
-                currentName.c_str(),
-                smba::kActivityName
-            );
-            return;
-        }
+    // Activity presence, not a workflow-name suffix, owns the lifecycle
+    // decision.  A clone can preserve our exact Activity while another
+    // plugin composes a name such as ``base.mba.dualbr``.  Conversely, a name
+    // ending in .mba does not prove that it carries this process's callback.
+    if (current->Contains(smba::kActivityName)) {
         if (!smba::AddActivityToWorkflow(current)) {
             LogError(
-                "[SMBA] refusing current MBA workflow %s: %s is foreign or unowned; will not append another .mba",
+                "[SMBA] refusing current workflow %s: %s is foreign or unowned",
                 currentName.c_str(),
                 smba::kActivityName
             );
             return;
         }
-        LogInfo("[SMBA] refreshed current MBA workflow %s", currentName.c_str());
+        LogInfo("[SMBA] refreshed current owned MBA activity in workflow %s", currentName.c_str());
         return;
     }
 

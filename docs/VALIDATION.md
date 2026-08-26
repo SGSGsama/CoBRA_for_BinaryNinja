@@ -1,120 +1,61 @@
-# Validation record
+# SMBA validation manifest
 
-This file records the standalone repository validation commands and exact
-dependency revisions. It intentionally contains no sample inputs, binary
-database paths, candidate addresses, or runtime evidence claims.
+Validation date: 2026-08-20 (Asia/Shanghai). Generated outputs named below are evidence paths outside the source tree; no source C++ was changed for this documentation/evidence update.
 
-## Required records
+The 2026-08-26 activity-first lifecycle repair supersedes the old suffix-based
+interpretation of the workflow probe below. This document retains the original
+observations as historical evidence; current usage is defined by
+[`WORKFLOW_AND_ROLLBACK.md`](WORKFLOW_AND_ROLLBACK.md), where activity presence
+and exact ownership—not a `.mba` suffix—select refresh versus derivation.
 
-Every release validation must record:
+## Reproducible headless validation
 
-1. The repository commit under test and `git status --short` result.
-2. Exact `git submodule status` lines for CoBRA and Binary Ninja API.
-3. The complete `uvx` bootstrap, Z3 core, forced-no-Z3 core, and optional
-   plugin build commands.
-4. Whether `install` was intentionally run. Normal validation must record
-   that it was not run.
-5. The static first-party-term scan and the headless compile-database check.
+Use the `uvx` CMake/CTest commands in [`BUILD_AND_TEST.md`](BUILD_AND_TEST.md) for both required core branches:
 
-## Initial standalone validation — 2026-08-21 (Asia/Shanghai)
+| Branch | Required result |
+| --- | --- |
+| Z3-enabled core | Arithmetic simplification plus generic constant-comparison tests pass; accepted predicates are `ProvedConstant` and `z3Verified`. |
+| Forced no-Z3 core | Core tests pass; predicate proofs fail closed and no predicate is classified as probabilistic/verified. |
 
-The tested source baseline is the initial standalone commit
-`f7ae98c978d964ed95d9d223403ff589fef013b3`. The first commit had a clean
-`git status --short`; this record is committed separately so the exact tested
-baseline hash can be recorded without a self-referential commit hash.
+The core predicate coverage includes true/false constants, non-constant comparisons, signed-versus-unsigned ordering, wide logical shifts, invalid width/variable inputs, and Z3-unavailable behavior. Plugin/workflow builds require Z3 and are not validated by the no-Z3 diagnostic configuration.
 
-Pinned top-level submodules at validation time:
+## Durable runtime evidence
 
-```text
- af44b8ad7c8ec548d431463475e93b0118e77a29 third_party/CoBRA
- aa25bfcfd36532ec3850558a58444df7727e297b third_party/binaryninja-api
-```
+The concise evidence artifacts are intentionally retained rather than raw multi-megabyte Binary Ninja analysis output:
 
-The required Binary Ninja API nested `vendor/fmt` submodule was initialized at
-`40626af88bd7df9a5fb80be7b25ac85b122d6c21`. The normal recursive bootstrap
-command in [`BUILD_AND_TEST.md`](BUILD_AND_TEST.md) performs that initialization
-from a clean clone.
+| Artifact | What it establishes |
+| --- | --- |
+| `analysis/SMBA_deobf/draft/smba_cobra_validation/preview_generic_predicates.log` | Read-only Preview accepted 14 generic candidates. `0x51eb10` and `0x51ebd4` are proved true; `0x51ed34` and `0x51ee90` are proved false; `0x51ee30` has no candidate. |
+| `/tmp/smba-disposable-legacy-preview.log` (source evidence) | The legacy arithmetic candidates at `0x444478`, `0x444464`, `0x4444f4`, `0x4444f0`, and `0x44475c` remain recoverable, together with additional safe candidates. It is regression context, not the current exact count. |
+| `analysis/SMBA_deobf/draft/smba_cobra_validation/workflow_register_refresh.log` | `core.function.metaAnalysis.mba` registered while selection remained `core.function.metaAnalysis`; repeat refresh retained Activity `0x8de49eb30`, advanced generation `1 -> 2`, and fail-closed for missing or foreign activities. The appended post-install smoke retained Activity `0x9cad37b70` in a fresh BN process. |
 
-Environment: macOS arm64, AppleClang 21.0.0.21000101, CMake 4.4.2 via
-`uvx --from cmake`, and Binary Ninja at `/Applications/Binary Ninja.app`.
+The generic Preview proves neither workflow application nor any write: Preview is read-only and does not create SSA, write MLIL, change a default setting, save a BNDB, or edit machine code. `0x51ee30` is intentionally unresolved by current conservative recovery; it is not filtered by an address-specific rule.
 
-### Commands and outcomes
+## Workflow lifecycle check
 
-The dependency prefix was rebuilt from the pinned CoBRA source, outside the
-repository:
+The workflow record documents the following observations:
 
-```bash
-REPO_ROOT=$(pwd)
-uvx --from cmake cmake \
-  -S "$REPO_ROOT/third_party/CoBRA/dependencies" \
-  -B /tmp/smba-cobra-mba-deps-z3 \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCOBRA_ENABLE_Z3=ON \
-  -DCOBRA_BUILD_TESTS=OFF
-uvx --from cmake cmake --build /tmp/smba-cobra-mba-deps-z3 --parallel
-```
+1. From `core.function.metaAnalysis`, registration created `core.function.metaAnalysis.mba` without changing the selected workflow.
+2. Repeating the command refreshed the exact owned Activity object `0x8de49eb30`; its mutable dispatch generation advanced from `1` to `2` while the registered workflow topology stayed immutable.
+3. In this pre-repair probe, a target with no MBA activity was refused and a foreign same-name Activity was also refused; neither path was repaired or renamed, so this particular probe created no `.mba.mba` derivative. The current activity-first contract instead treats an activity-absent suffix-shaped current name literally and derives only after the absence check; foreign present activities remain refused.
+4. Source and disposable BNDB SHA-256 values matched before/after, and that isolated probe made no save or installation. A separate post-install smoke loaded the installed dylib in a fresh BN process, repeated the command on a read-only raw ELF view, retained Activity `0x9cad37b70`, kept selection/default unchanged, and left the ELF SHA-256 unchanged.
 
-Strict Z3 core configuration, build, and test all succeeded:
+`extension.smba.cobra.base` remains an unselected compatibility clone. Normal operation is opt-in selection of the explicitly registered `W.mba` workflow.
 
-```bash
-REPO_ROOT=$(pwd)
-uvx --from cmake cmake -S "$REPO_ROOT" \
-  -B /tmp/smba-cobra-mba-core-z3 \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX=/tmp/smba-cobra-mba-deps-z3/install
-uvx --from cmake cmake --build /tmp/smba-cobra-mba-core-z3 --parallel
-uvx --from cmake ctest --test-dir /tmp/smba-cobra-mba-core-z3 --output-on-failure
-```
+## Recovery/proof assertions covered by the evidence
 
-`smba-core-tests` passed (1/1) and printed `SMBA core tests passed (Z3 proof
-path)`. Its compile database contained no Binary Ninja terms.
+Candidate selection is structural, not address/function/constant matching. Normal/SSA root mappings must agree in both directions; SSA def-use recovery preserves exact widths with `MLIL_ZX` masks. Arithmetic candidates require CoBRA cost reduction plus a Z3 proof; comparison candidates use exact signed/unsigned Z3 proofs for constant truth values. `MLIL_BOOL_TO_INT` is over-approximated only in predicate context as `0`/`1`; PHI, load/call, memory/alias, unsupported casts, cycles, and resource limits are conservative leaves or rejection paths.
 
-The forced-no-Z3 configuration, build, and test also succeeded:
+Workflow transformation commits only a successful fresh normal-MLIL copy after finalization and SSA regeneration. The documented behavior is therefore consistent with read-only Preview and fail-closed registration, but the evidence does not claim that every possible MLIL operation or an interactive GUI reload has been dynamically exercised.
 
-```bash
-REPO_ROOT=$(pwd)
-uvx --from cmake cmake -S "$REPO_ROOT" \
-  -B /tmp/smba-cobra-mba-core-no-z3 \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=OFF -DSMBA_BUILD_TESTS=ON -DSMBA_REQUIRE_Z3=OFF \
-  -DCMAKE_DISABLE_FIND_PACKAGE_Z3=ON \
-  -DSMBA_DEPS_PREFIX=/tmp/smba-cobra-mba-deps-z3/install
-uvx --from cmake cmake --build /tmp/smba-cobra-mba-core-no-z3 --parallel
-uvx --from cmake ctest --test-dir /tmp/smba-cobra-mba-core-no-z3 --output-on-failure
-```
+## Ephemeral Binary Ninja Python helper inventory
 
-`smba-core-tests` passed (1/1) and printed the no-Z3 diagnostic-path result;
-its comparison-proof tests confirmed rejection in both relaxed and strict
-runtime modes. The reusable helper was exercised as well:
+No helper file was persisted in the repository. Validation used narrow, ephemeral BN Python here-doc snippets in the Binary Ninja host; each was discarded after producing the retained log excerpt.
 
-```bash
-scripts/validate.sh --deps-prefix /tmp/smba-cobra-mba-deps-z3/install
-```
+| Helper | Purpose / inputs | Outputs / analysis point | Invocation and risk |
+| --- | --- | --- | --- |
+| Generic Preview collector | Disposable BNDB, rebuilt adapter, selected functions. | Preview report lines, accepted count, truth values, and absence of `0x51ee30`. | Passed to BN Python on standard input; read-only BN-host analysis, no Android attach/injection. |
+| Workflow register/refresh probe | Disposable BNDB, `core.function.metaAnalysis`, repeated registration command, controlled missing/foreign activity cases. | Registered/selected workflow names, Activity identity, dispatch generation/action, refusal paths. | Passed to BN Python on standard input; exercises BN workflow objects only, no Android attach/injection. |
+| SHA-256 / save guard | Source and disposable BNDB paths. | Matching SHA-256 before/after and confirmation of no save/install. | Host-side file hash and BN state observation; no target-process interaction. |
 
-It performed both branches in fresh `mktemp` directories and passed its
-headless compile-database and first-party-term checks.
-
-The Binary Ninja plugin configured and built successfully against the installed
-application (the temporary directory was created with `mktemp -d`):
-
-```bash
-REPO_ROOT=$(pwd)
-uvx --from cmake cmake -S "$REPO_ROOT" \
-  -B /tmp/smba-cobra-mba-plugin-standalone.NxOpKS \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DSMBA_BUILD_PLUGIN=ON -DSMBA_BUILD_TESTS=OFF -DSMBA_REQUIRE_Z3=ON \
-  -DSMBA_DEPS_PREFIX=/tmp/smba-cobra-mba-deps-z3/install \
-  -DBN_INSTALL_DIR=/Applications/Binary\ Ninja.app
-uvx --from cmake cmake --build /tmp/smba-cobra-mba-plugin-standalone.NxOpKS --parallel
-```
-
-The build produced `smba-cobra-mba.dylib`. No `install` target was invoked, no
-installed plugin was changed, and generated dependencies/build outputs remain
-outside the repository.
-
-No C++ source repair was required for the pinned official dependencies. The
-only standalone packaging adjustments were replacing parent-layout defaults
-with `third_party/` paths and removing sample-specific documentation; the
-upstream Binary Ninja API additionally requires its existing `vendor/fmt`
-nested submodule to be initialized before configuring.
+These helpers have no hooks into the Android target, no Frida usage, no device injection, and no machine-code modification. A future persistent or ephemeral helper must extend this inventory with its exact input/output, analysis point, validation objective, invocation, and injection risk.
