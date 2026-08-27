@@ -10,6 +10,10 @@
 namespace smba {
 
 inline constexpr const char* kActivityName = "extension.smba.cobra.simplifyMlil";
+inline constexpr const char* kPreviewCommandName =
+    "SMBA CoBRA\\Preview verified MBA simplifications";
+inline constexpr const char* kRegisterWorkflowCommandName =
+    "SMBA CoBRA\\Register or refresh current .mba workflow";
 
 struct AnalysisLimits {
     size_t maxNodes = 350;

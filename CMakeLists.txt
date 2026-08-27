@@ -190,6 +190,19 @@ if(SMBA_BUILD_TESTS)
     # available, cobra-verify).  It must never pull binaryninjaapi or a BN
     # runtime so it can run in CI and on a dependency-only host.
     add_test(NAME smba-core-tests COMMAND smba-core-tests)
+
+    # The AI result formatter deliberately has no Binary Ninja dependency.
+    # Keep its regression test in the headless build so JSON escaping and the
+    # machine protocol can be validated without a GUI/runtime.
+    add_executable(smba-plugin-json-tests
+        tests/plugin_json_tests.cpp
+        src/PluginJson.cpp
+    )
+    target_compile_features(smba-plugin-json-tests PRIVATE cxx_std_23)
+    target_include_directories(smba-plugin-json-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    add_test(NAME smba-plugin-json-tests COMMAND smba-plugin-json-tests)
 endif()
 
 if(SMBA_BUILD_PLUGIN)
@@ -210,6 +223,7 @@ if(SMBA_BUILD_PLUGIN)
 
     add_library(smba-cobra-mba SHARED
         src/BNAdapter.cpp
+        src/PluginJson.cpp
         src/Plugin.cpp
     )
     add_library(smba::plugin ALIAS smba-cobra-mba)

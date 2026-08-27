@@ -1,0 +1,21 @@
+{
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "4e0f9f46c7e7b922ab184d93f5d126ba417bf6a2650613ea9387d64ad0b47aeb",
+      "size": 8530
+    },
+    {
+      "path": "ai_cli.py",
+      "sha256": "eac3f2eed950f6f98a2f79b53ea192662d1994ebf06ca58c695b57619687697b",
+      "size": 26107
+    },
+    {
+      "path": "smba-cobra-mba.dylib",
+      "sha256": "5bb137ec4fea654a5d137f5cb8ef56c009f79d7f07e983e8e58b9c3a5871a3b0",
+      "size": 30175688
+    }
+  ],
+  "plugin": "smba-cobra-mba",
+  "schema_version": "smba-cobra-mba-artifact-v1"
+}

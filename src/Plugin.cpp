@@ -1,7 +1,9 @@
 #include "smba/PluginAPI.h"
+#include "smba/PluginJson.h"
 
 #include "binaryninjaapi.h"
 
+#include <optional>
 #include <string>
 
 using namespace BinaryNinja;
@@ -10,6 +12,49 @@ namespace {
 
 constexpr const char* kCompatibilityBaseWorkflow = "extension.smba.cobra.base";
 constexpr const char* kCoreMetaAnalysisWorkflow = "core.function.metaAnalysis";
+
+void LogMachineResult(const std::string& result) {
+    LogInfo("%s%s", smba::kMachineResultLogPrefix, result.c_str());
+}
+
+void LogRegistrationResult(const smba::RegistrationMachineResult& result) {
+    LogMachineResult(smba::FormatRegistrationMachineResult(result));
+}
+
+smba::RegistrationMachineResult RefusedRegistration(
+    uint64_t functionStart,
+    std::string workflowBefore,
+    std::string target,
+    std::string reason
+) {
+    smba::RegistrationMachineResult result;
+    result.accepted = false;
+    result.action = "refused";
+    result.functionStart = functionStart;
+    result.workflowBefore = std::move(workflowBefore);
+    result.workflowAfter = std::nullopt;
+    result.target = std::move(target);
+    result.activity = smba::kActivityName;
+    result.reason = std::move(reason);
+    return result;
+}
+
+smba::RegistrationMachineResult AcceptedRegistration(
+    uint64_t functionStart,
+    std::string action,
+    std::string workflowBefore,
+    std::string workflowAfter
+) {
+    smba::RegistrationMachineResult result;
+    result.accepted = true;
+    result.action = std::move(action);
+    result.functionStart = functionStart;
+    result.workflowBefore = std::move(workflowBefore);
+    result.target = workflowAfter;
+    result.workflowAfter = std::move(workflowAfter);
+    result.activity = smba::kActivityName;
+    return result;
+}
 
 void RegisterCompatibilityBaseWorkflow() {
     // This name is an opt-in compatibility surface.  Another plugin or an
@@ -51,8 +96,9 @@ void RegisterCompatibilityBaseWorkflow() {
     }
 
     const std::string description =
-        "{\"title\":\"" + std::string(kCompatibilityBaseWorkflow)
-        + "\",\"description\":\"Opt-in clone of " + kCoreMetaAnalysisWorkflow
+        "{\"title\":\"" + smba::EscapeJsonString(kCompatibilityBaseWorkflow)
+        + "\",\"description\":\"Opt-in clone of "
+        + smba::EscapeJsonString(kCoreMetaAnalysisWorkflow)
         + " with verified CoBRA MBA simplification.\"}";
     if (!Workflow::RegisterWorkflow(derived, description)) {
         LogError(
@@ -90,6 +136,25 @@ void LogReport(Function* function, const smba::FunctionReport& report) {
             candidate.reason.c_str()
         );
     }
+
+    smba::PreviewMachineResult machine;
+    machine.accepted = report.accepted;
+    machine.applied = report.applied;
+    machine.diagnostic = report.diagnostic;
+    machine.functionStart = function->GetStart();
+    machine.candidates.reserve(report.candidates.size());
+    for (const auto& candidate : report.candidates) {
+        machine.candidates.push_back({
+            .address = candidate.address,
+            .expressionIndex = candidate.expressionIndex,
+            .before = candidate.before,
+            .after = candidate.after,
+            .reason = candidate.reason,
+            .accepted = candidate.accepted,
+            .applied = candidate.applied,
+        });
+    }
+    LogMachineResult(smba::FormatPreviewMachineResult(machine));
 }
 
 void RunPreviewCommand(BinaryView*, Function* function) {
@@ -99,6 +164,10 @@ void RunPreviewCommand(BinaryView*, Function* function) {
     auto mlil = function->GetMediumLevelIL();
     if (!mlil) {
         LogWarn("[SMBA] function at 0x%llx has no MLIL", static_cast<unsigned long long>(function->GetStart()));
+        smba::PreviewMachineResult machine;
+        machine.diagnostic = "MLIL is unavailable";
+        machine.functionStart = function->GetStart();
+        LogMachineResult(smba::FormatPreviewMachineResult(machine));
         return;
     }
     const auto report = smba::PreviewFunction(mlil);
@@ -116,6 +185,12 @@ void RegisterOrRefreshWorkflow(Function* function) {
     auto current = function->GetWorkflow();
     if (!current) {
         LogError("[SMBA] current function has no workflow");
+        LogRegistrationResult(RefusedRegistration(
+            function->GetStart(),
+            "",
+            "",
+            "current function has no workflow"
+        ));
         return;
     }
 
@@ -131,9 +206,18 @@ void RegisterOrRefreshWorkflow(Function* function) {
                 currentName.c_str(),
                 smba::kActivityName
             );
+            LogRegistrationResult(RefusedRegistration(
+                function->GetStart(),
+                currentName,
+                currentName,
+                "current workflow contains a foreign or unowned MBA activity"
+            ));
             return;
         }
         LogInfo("[SMBA] refreshed current owned MBA activity in workflow %s", currentName.c_str());
+        LogRegistrationResult(AcceptedRegistration(
+            function->GetStart(), "refreshed", currentName, currentName
+        ));
         return;
     }
 
@@ -144,6 +228,12 @@ void RegisterOrRefreshWorkflow(Function* function) {
                 "[SMBA] refusing to modify existing %s: it lacks the owned MBA activity",
                 targetName.c_str()
             );
+            LogRegistrationResult(RefusedRegistration(
+                function->GetStart(),
+                currentName,
+                targetName,
+                "existing target workflow lacks the owned MBA activity"
+            ));
             return;
         }
         if (!smba::AddActivityToWorkflow(existing)) {
@@ -151,9 +241,18 @@ void RegisterOrRefreshWorkflow(Function* function) {
                 "[SMBA] refusing to refresh %s: same-name MBA activity is foreign or unowned",
                 targetName.c_str()
             );
+            LogRegistrationResult(RefusedRegistration(
+                function->GetStart(),
+                currentName,
+                targetName,
+                "target workflow MBA activity is foreign or unowned"
+            ));
             return;
         }
         LogInfo("[SMBA] refreshed registered MBA workflow %s", targetName.c_str());
+        LogRegistrationResult(AcceptedRegistration(
+            function->GetStart(), "refreshed", currentName, targetName
+        ));
         return;
     }
 
@@ -163,14 +262,26 @@ void RegisterOrRefreshWorkflow(Function* function) {
             "[SMBA] failed to compose %s after MLIL generation; source topology already contains an unowned MBA activity or has no MLIL anchor",
             targetName.c_str()
         );
+        LogRegistrationResult(RefusedRegistration(
+            function->GetStart(),
+            currentName,
+            targetName,
+            "could not compose the owned MBA activity after the MLIL anchor"
+        ));
         return;
     }
     const std::string description =
-        "{\"title\":\"" + targetName
-        + "\",\"description\":\"Explicit derivative of " + currentName
+        "{\"title\":\"" + smba::EscapeJsonString(targetName)
+        + "\",\"description\":\"Explicit derivative of " + smba::EscapeJsonString(currentName)
         + " with verified CoBRA MBA simplification.\"}";
     if (!Workflow::RegisterWorkflow(derived, description)) {
         LogError("[SMBA] failed to register composed workflow %s", targetName.c_str());
+        LogRegistrationResult(RefusedRegistration(
+            function->GetStart(),
+            currentName,
+            targetName,
+            "Binary Ninja rejected workflow registration"
+        ));
         return;
     }
     LogInfo(
@@ -178,6 +289,9 @@ void RegisterOrRefreshWorkflow(Function* function) {
         targetName.c_str(),
         currentName.c_str()
     );
+    LogRegistrationResult(AcceptedRegistration(
+        function->GetStart(), "created", currentName, targetName
+    ));
 }
 
 } // namespace
@@ -188,13 +302,13 @@ BN_DECLARE_CORE_ABI_VERSION
 
 BINARYNINJAPLUGIN bool CorePluginInit() {
     PluginCommand::RegisterForFunction(
-        "SMBA CoBRA\\Preview verified MBA simplifications",
+        smba::kPreviewCommandName,
         "Analyze the current function and log verified MLIL MBA simplifications without changing IL.",
         RunPreviewCommand,
         HasMLIL
     );
     PluginCommand::RegisterForFunction(
-        "SMBA CoBRA\\Register or refresh current .mba workflow",
+        smba::kRegisterWorkflowCommandName,
         "Register the current workflow plus .mba, or refresh its owned MBA activity without changing workflow selection.",
         [](BinaryView*, Function* function) { RegisterOrRefreshWorkflow(function); },
         [](BinaryView*, Function* function) { return function && function->GetWorkflow(); }
